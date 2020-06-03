@@ -7,7 +7,7 @@ mkdir -p books/
 mkdir -p scielo/
 
 # TESTSET BOOKS
-wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1iSPKPRFHIiZWVBMdOCyccIBXDyQd5Uz3' -O books/TESTSET.pkl
+wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=177dFn67zhVXIGHakNUA-iGtpfb89fHs6' -O 
 
 # TRAINSET CAPES
 wget --no-check-certificate 'https://docs.google.com/uc?export=download&id=1y7HJkVl7XFsl7ZPWDZJIuszTTHCmaqvo' -O capes/TRAINSET.pkl
