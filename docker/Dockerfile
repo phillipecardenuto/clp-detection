@@ -41,23 +41,17 @@ RUN apt-get update \
 # Install jupyterlab
 RUN pip install jupyterlab \
         && pip install jupyter-tensorboard \
-        && pip install jupyter-lsp \
         && pip install ipywidgets \
         && jupyter labextension install @jupyter-widgets/jupyterlab-manager \
         && jupyter nbextension enable --py widgetsnbextension \
         && jupyter labextension install @jupyterlab/toc \
         && jupyter labextension install @ijmbarr/jupyterlab_spellchecker \
         && jupyter labextension install jupyterlab_tensorboard \
-        && jupyter labextension install @lckr/jupyterlab_variableinspector \
         && jupyter labextension install @aquirdturtle/collapsible_headings \
-        && jupyter labextension install @mohirio/jupyterlab-horizon-theme \
-        && jupyter labextension install @krassowski/jupyterlab-lsp  \
-        && pip install python-language-server[all] \
         && jupyter labextension install @telamonian/theme-darcula \
         && jupyter lab build
 
-RUN jupyter serverextension enable --sys-prefix --py jupyter_lsp \
-    && jupyter labextension install @wallneradam/output_auto_scroll \
+RUN jupyter labextension install @wallneradam/output_auto_scroll \
         && jupyter lab build
 
 
