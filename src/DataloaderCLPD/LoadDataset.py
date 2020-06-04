@@ -13,6 +13,7 @@ from transformers import T5Tokenizer
 # Torch
 import torch
 from torch.utils.data import Dataset
+
 class CLPDDataset():
     """
     This funcition uses a pkl file, already downloaded, to load and organize a dataset.
@@ -90,9 +91,75 @@ class CLPDDataset():
         # Max number of tokens in sentence
         self.max_length = max_length
         
+    def get_double_tokenized_data(self,eng_tokenizer,pt_tokenizer):
+        """
+        Function to work with two diferents tokenizer on each sentence language
+        
+        Return encoded sentences with the touple (encoded(eng_sentences),encoded(pt_senteces),labels)
+        
+        """
+        if self.data_type == 'train':
+            if self.name == 'books':
+                raise IOError ("Books does not have a train mode")
+            
+            # TRAIN DATA
+            
+            # Load pandas pkl
+            dataset = pd.read_pickle(f"{self.data_path}/TRAINSET.pkl")
+
+            # Sample Data
+            if self.sample_size > len(dataset):
+                self.sample_size = len(dataset)
+
+            dataset = dataset.sample(self.sample_size,random_state=self.seed)
+
+            # Assert that index is the row line
+            dataset = dataset.reset_index(drop=True)
+
+            # Dividing dataset in train and validation
+            trainset, valset = train_test_split(dataset, test_size=self.val_size, random_state=self.seed)
+
+            if len(valset) > 0:
+                
+                trainset_encoded = DoubleBertCapesScielo(trainset,eng_tokenizer, pt_tokenizer,
+                                                         self.n_negatives,self.max_length,
+                                                         f"{self.name} Train")
+                valset_encoded = DoubleBertCapesScielo(valset, eng_tokenizer, pt_tokenizer,
+                                                       self.n_negatives,self.max_length,
+                                                       f"{self.name} Validation")
+
+                return trainset_encoded, valset_encoded
+
+            else:
+                trainset_encoded = DoubleBertCapesScielo(trainset,eng_tokenizer, pt_tokenizer,
+                                                         self.n_negatives,self.max_length,
+                                                         f"{self.name} Train")
+                return trainset_encoded
+                
+        elif self.data_type == 'test':
+            # TESTSET
+            
+             # Load pandas pkl
+            testset = pd.read_pickle(f"{self.data_path}/TESTSET.pkl")
+
+            # Assert that index is the row line
+            testset = testset.reset_index(drop=True)
+
+            if self.name in ['capes','scielo']:
+                testset_encoded = DoubleBertCapesScielo(testset,eng_tokenizer, pt_tokenizer, 2 ,
+                                                        self.max_length,f"{self.name} TEST")
+
+            elif self.name in ['books']:
+                testset_encoded = DoubleBertBooks(testset, eng_tokenizer, pt_tokenizer,
+                                                  self.max_length,f"{self.name} TEST")
+
+            return testset_encoded
       
         
     def get_organized_data(self,tokenizer,tokenizer_type='bert'):
+        """
+        Function to work with just one tokenizer for both languages in pt or eng.
+        """
         
         if tokenizer_type == 'bert' and isinstance(tokenizer,T5Tokenizer):
             raise TypeError("Tokenizer type is 'bert' but It instance of 't5'")
@@ -171,6 +238,7 @@ class DataloaderCapesScielo(Dataset):
         self.tokenizer_type = tokenizer_type
         
         self.token_ids, self.attention_mask, self.token_type_ids , self.labels, self.pairs = self.encode(self.dataset, tokenizer)
+        self.labels =  torch.LongTensor(self.labels)
         
         
     def __len__(self):
@@ -272,7 +340,7 @@ class DataloaderCapesScielo(Dataset):
         return torch.LongTensor(self.token_ids[idx]),\
                torch.LongTensor(self.attention_mask[idx]),\
                torch.LongTensor(self.token_type_ids[idx]),\
-               torch.LongTensor(self.labels[idx]),\
+               self.labels[idx],\
                self.pairs[idx]
     
     
@@ -290,6 +358,7 @@ class DataloaderBooks(Dataset):
         self.tokenizer_type = tokenizer_type
         
         self.token_ids, self.attention_mask, self.token_type_ids , self.labels, self.pairs = self.encode(self.dataset, tokenizer)
+        self.labels =  torch.LongTensor(self.labels)
         
         
     def __len__(self):
@@ -416,5 +485,213 @@ class DataloaderBooks(Dataset):
         return torch.LongTensor(self.token_ids[idx]),\
                torch.LongTensor(self.attention_mask[idx]),\
                torch.LongTensor(self.token_type_ids[idx]),\
-               torch.LongTensor(self.labels[idx]),\
+               self.labels[idx],\
+               self.pairs[idx]
+
+    
+class DoubleBertBooks(Dataset):
+    
+    def __init__(self,dataset,eng_tokenizer, pt_tokenizer,max_length,name):
+        """
+        Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Capes or Scielo Dataset
+        
+        Return value of dataset[i]:
+            i-th sentence:<tuple> ( <dict> encoded(eng_sentence[i]), <dict> encoded(pt_setence[i]), label)
+            The encoded dict has the attributes:
+                encode['input_ids'], encode['attention_mask'], encode['token_type_ids']
+                
+        """
+        
+        self.name = name
+        self.dataset = dataset
+        self.max_length = max_length
+        
+        self.eng_encode, self.pt_encode, self.labels, self.pairs = self.encode(self.dataset, eng_tokenizer,pt_tokenizer)
+        self.labels =  torch.LongTensor(self.labels)
+        
+        
+    def __len__(self):
+        return len(self.labels)
+
+    def encode(self, dataframe,eng_tokenizer,pt_tokenizer):
+        
+        eng_encode = []
+        pt_encode = []
+        
+        labels = []
+        pairs_debug = []
+        # Setup name of tqdm bar
+        desc = f"Processing {self.name.upper()}"
+            
+        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+            row = dataframe.iloc[index]
+            
+             # Sentences that are considered 'plagiarism' ENG->PT
+            label = 1 # true
+            text_eng = row.ENG
+            text_pt = row.PT
+            pairs_debug.append(f"ENG: {row.ENG}\nPT: {row.PT}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are considered 'plagiarism' ENG->PT_PARAPHRASE
+            label = 1 # true
+            text_eng = row.ENG
+            text_pt = row['paraphrase-pt']
+            pairs_debug.append(f"ENG: {row.ENG}\nPT_PARAPHRASE: {row['paraphrase-pt']}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are considered 'plagiarism' PT->ENG_PARAPHRASE
+            label = 1 # true
+            text_eng = row['paraphrase-eng']
+            text_pt = row.PT
+            pairs_debug.append(f"ENG_PARAPHRASE: {row['paraphrase-eng']}\nPT: {row.PT}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are NOT considered 'plagiarism' from ENG to PT_ERLA
+            label = 0 # False
+            text_eng = row.ENG
+            text_pt = row['pt_books_paraphrase__pt_erla']
+            pairs_debug.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['pt_books_paraphrase__pt_erla']}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are NOT considered 'plagiarism' from PT to ENG_ERLA
+            label = 0 # False
+            text_eng = row['eng_books__eng_erla']
+            text_pt = row.PT
+            pairs_debug.append(f"NEGATIVE_ENG: {row['eng_books__eng_erla']}\nPT:{row.PT}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are NOT considered 'plagiarism' (same dataset book) from PT to ENG
+            label = 0 # False
+            text_eng = row['top_1_qpt_eng']
+            text_pt = row.PT
+            pairs_debug.append(f"NEGATIVE_ENG: {row['top_1_qpt_eng']}\nPT:{row.PT}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that are NOT considered 'plagiarism' (same dataset book) from ENG to PT
+            label = 0 # False
+            text_eng = row.ENG
+            text_pt = row['top_1_qeng_pt']
+            pairs_debug.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['top_1_qeng_pt']}")
+            eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+            pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+            labels.append(label)
+            
+        return  eng_encode, pt_encode,labels, pairs_debug
+
+    def get_encode(self,text,tokenizer):
+        """
+        Get encode of each model, implemented for Bert and T5 encoder
+        "bert": Encoded 
+        """
+        
+        return  tokenizer.encode_plus(text=text, max_length=self.max_length, 
+                                       return_tensors='pt', pad_to_max_length=True,
+                                       add_special_tokens=True)
+        
+        
+    def __getitem__(self, idx):
+                
+        return self.eng_encode[idx],\
+               self.pt_encode[idx],\
+               self.labels[idx],\
+               self.pairs[idx]
+
+
+class DoubleBertCapesScielo(Dataset):
+    
+    def __init__(self,dataset,eng_tokenizer, pt_tokenizer,n_negatives,max_length,name):
+        """
+        Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Capes or Scielo Dataset
+        
+        Return value of dataset[i]:
+            i-th sentence:<tuple> ( <dict> encoded(eng_sentence[i]), <dict> encoded(pt_setence[i]), label)
+            The encoded dict has the attributes:
+                encode['input_ids'], encode['attention_mask'], encode['token_type_ids']
+                
+        """
+        
+        self.name = name
+        self.dataset = dataset
+        self.n_negatives = n_negatives
+        self.max_length = max_length
+        
+        self.eng_encode, self.pt_encode, self.labels, self.pairs = self.encode(self.dataset, eng_tokenizer,pt_tokenizer)
+        self.labels =  torch.LongTensor(self.labels)
+        
+        
+    def __len__(self):
+        return len(self.labels)
+
+    def encode(self, dataframe,eng_tokenizer,pt_tokenizer):
+        
+        eng_encode = []
+        pt_encode = []
+        
+        labels = []
+        pairs_debug = []
+        # Setup name of tqdm bar
+        desc = f"Processing {self.name.upper()}"
+            
+        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+            row = dataframe.iloc[index]
+            
+            # Sentences that are considered 'plagiarism' ENG->PT
+            label = 1 # true
+            pairs_debug.append(f"ENG: {row.ENG}\nPT: {row.PT}")
+            eng_encode.append( self.get_encode(row.ENG,eng_tokenizer) )
+            pt_encode.append( self.get_encode(row.PT,pt_tokenizer))
+            labels.append(label)
+            
+            # Sentences that not are considered 'plagiarism' from eng to pt
+            for neg in range(self.n_negatives):
+                label = 0 # False
+                text_eng = row.ENG
+                text_pt = eval(f"row.top_{neg+1}_qeng_pt")
+                pairs_debug.append(f"ENG: {text_eng}\nNEGATIVE_{neg+1}_PT: {text_pt}")
+                eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+                pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+                labels.append(label)
+                
+            # Sentences that not are considered 'plagiarism' from pt to eng
+            for neg in range(self.n_negatives):
+                label = 0 # False
+                text_eng = eval(f"row.top_{neg+1}_qpt_eng")
+                text_pt = row.PT
+                pairs_debug.append(f"NEGATIVE_{neg+1}_ENG: {text_eng}\nPT: {text_pt}")
+                eng_encode.append( self.get_encode(text_eng,eng_tokenizer) )
+                pt_encode.append( self.get_encode(text_pt,pt_tokenizer))
+                labels.append(label)
+                
+        
+        return  eng_encode, pt_encode,labels, pairs_debug
+
+    def get_encode(self,text,tokenizer):
+        """
+        Get encode of each model, implemented for Bert and T5 encoder
+        "bert": Encoded 
+        """
+        
+        return  tokenizer.encode_plus(text=text, max_length=self.max_length, 
+                                       return_tensors='pt', pad_to_max_length=True,
+                                       add_special_tokens=True)
+        
+        
+    def __getitem__(self, idx):
+                
+        return self.eng_encode[idx],\
+               self.pt_encode[idx],\
+               self.labels[idx],\
                self.pairs[idx]
