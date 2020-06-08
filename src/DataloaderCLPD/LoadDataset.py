@@ -6,7 +6,7 @@ from typing import List
 import pandas as pd
 import re
 from argparse import Namespace
-from tqdm.notebook  import trange, tqdm_notebook
+from tqdm  import trange, tqdm
 from sklearn.model_selection import train_test_split
 from transformers import T5Tokenizer
 
@@ -58,8 +58,12 @@ class CLPDDataset():
         elif name == 'books' and data_path is None:
             self.data_path = '/work/datasets/books/'
         
-        elif not name in ['capes', 'scielo' , 'books']:
+        elif name == 'capes_scielo':
+            self.data_path = None
+        
+        elif not name in ['capes', 'scielo' ,'capes_scielo', 'books']:
             raise IOError(f"{name} unkown for dataset")
+        
             
             
             
@@ -177,14 +181,34 @@ class CLPDDataset():
     def organize_train(self,tokenizer,tokenizer_type='bert'):
         
         # Load pandas pkl
-        dataset = pd.read_pickle(f"{self.data_path}/TRAINSET.pkl")
+        if self.name == 'capes_scielo':
+            dataset_capes = pd.read_pickle("/work/datasets/capes/TRAINSET.pkl")
+            dataset_scielo = pd.read_pickle("/work/datasets/scielo/TRAINSET.pkl")
+            # Sample Data
+            # Dataset must be equal divided by capes and scielo
+            if self.sample_size/2 > len(dataset_capes):
+                sample_size_capes = len(dataset_capes)
+                sample_size_scielo = sample_size_capes
+            else: 
+                sample_size_capes = int(self.sample_size/2)
+                sample_size_scielo = sample_size_capes
+            
+            dataset_capes = dataset_capes.sample(sample_size_capes,random_state=self.seed)
+            dataset_scielo = dataset_scielo.sample(sample_size_scielo,random_state=self.seed)
+            
+            dataset = dataset_capes.append(dataset_scielo)
+                
+              
+            
+        else:
+            dataset = pd.read_pickle(f"{self.data_path}/TRAINSET.pkl")
         
-        # Sample Data
-        if self.sample_size > len(dataset):
-            self.sample_size = len(dataset)
+            # Sample Data
+            if self.sample_size > len(dataset):
+                self.sample_size = len(dataset)
 
-        dataset = dataset.sample(self.sample_size,random_state=self.seed)
-        
+            dataset = dataset.sample(self.sample_size,random_state=self.seed)
+
         # Assert that index is the row line
         dataset = dataset.reset_index(drop=True)
         
@@ -254,7 +278,7 @@ class DataloaderCapesScielo(Dataset):
         # Setup name of tqdm bar
         desc = f"Processing {self.name.upper()}"
             
-        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+        for index in tqdm(range(len(dataframe)),desc=desc):
             row = dataframe.iloc[index]
             
             # Sentences that are considered 'plagiarism' ENG->PT
@@ -375,7 +399,7 @@ class DataloaderBooks(Dataset):
         # Setup name of tqdm bar
         desc = f"Processing {self.name.upper()}"
             
-        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+        for index in tqdm(range(len(dataframe)),desc=desc):
             row = dataframe.iloc[index]
             
             # Sentences that are considered 'plagiarism' ENG->PT
@@ -523,7 +547,7 @@ class DoubleBertBooks(Dataset):
         # Setup name of tqdm bar
         desc = f"Processing {self.name.upper()}"
             
-        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+        for index in tqdm(range(len(dataframe)),desc=desc):
             row = dataframe.iloc[index]
             
              # Sentences that are considered 'plagiarism' ENG->PT
@@ -645,7 +669,7 @@ class DoubleBertCapesScielo(Dataset):
         # Setup name of tqdm bar
         desc = f"Processing {self.name.upper()}"
             
-        for index in tqdm_notebook(range(len(dataframe)),desc=desc):
+        for index in tqdm(range(len(dataframe)),desc=desc):
             row = dataframe.iloc[index]
             
             # Sentences that are considered 'plagiarism' ENG->PT
