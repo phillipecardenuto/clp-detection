@@ -95,6 +95,92 @@ class CLPDDataset():
         # Max number of tokens in sentence
         self.max_length = max_length
         
+    def get_organized_pairs(self):
+        """
+        Function to work with just one tokenizer for both languages in pt or eng.
+        """
+        
+        if self.data_type == 'train':
+            if self.name == 'books':
+                raise IOError ("Books does not have a train mode")
+                
+            return  self.train_pairs()
+        
+        elif self.data_type == 'test':
+            return self.test_pairs()
+        
+    
+    def train_pairs(self):
+        """
+        This function return pairs of sentence labeled as plagiarism or not.
+
+        Return: (sentence_1, sentence_2, label)
+        """
+         # Load pandas pkl
+        if self.name == 'capes_scielo':
+            dataset_capes = pd.read_pickle("/work/datasets/capes/TRAINSET.pkl")
+            dataset_scielo = pd.read_pickle("/work/datasets/scielo/TRAINSET.pkl")
+            # Sample Data
+            # Dataset must be equal divided by capes and scielo
+            if self.sample_size/2 > len(dataset_capes):
+                sample_size_capes = len(dataset_capes)
+                sample_size_scielo = sample_size_capes
+            else: 
+                sample_size_capes = int(self.sample_size/2)
+                sample_size_scielo = sample_size_capes
+            
+            dataset_capes = dataset_capes.sample(sample_size_capes,random_state=self.seed)
+            dataset_scielo = dataset_scielo.sample(sample_size_scielo,random_state=self.seed)
+            
+            dataset = dataset_capes.append(dataset_scielo)
+                
+        else:
+            
+            dataset = pd.read_pickle(f"{self.data_path}/TRAINSET.pkl")
+        
+            # Sample Data
+            if self.sample_size > len(dataset):
+                self.sample_size = len(dataset)
+
+            dataset = dataset.sample(self.sample_size,random_state=self.seed)
+
+        # Assert that index is the row line
+        dataset = dataset.reset_index(drop=True)
+        
+        # Dividing dataset in train and validation
+        trainset, valset = train_test_split(dataset, test_size=self.val_size, random_state=self.seed)
+        
+        if len(valset) > 0:
+            trainset_encoded = DataloaderCapesScieloPairs(trainset, self.n_negatives,self.max_length,
+                                                          f"{self.name} Train")
+            valset_encoded = DataloaderCapesScieloPairs(valset, self.n_negatives,self.max_length,
+                                                        f"{self.name} Validation")    
+            
+            return trainset_encoded, valset_encoded
+        
+        else:
+            trainset_encoded = DataloaderCapesScieloPairs(trainset, self.n_negatives,self.max_length,
+                                                          f"{self.name} Train")
+            return trainset_encoded
+        
+    def test_pairs(self):
+        
+        # Load pandas pkl
+        testset = pd.read_pickle(f"{self.data_path}/TESTSET.pkl")
+        
+        # Assert that index is the row line
+        testset = testset.reset_index(drop=True)
+        
+        if self.name in ['capes','scielo']:
+            testset_encoded = DataloaderCapesScieloPairs(testset, 2 ,
+                                                    self.max_length, f"{self.name} Test")
+        
+        elif self.name in ['books']:
+            testset_encoded = DataloaderBooksPairs(testset, self.max_length,
+                                                   f"{self.name} Test")
+        
+        return testset_encoded
+        
     def get_double_tokenized_data(self,eng_tokenizer,pt_tokenizer):
         """
         Function to work with two diferents tokenizer on each sentence language
@@ -246,6 +332,10 @@ class CLPDDataset():
                                               self.max_length,f"{self.name} TEST",tokenizer_type)
         
         return testset_encoded
+    
+#########################################
+#        DATALOADER CAPES SCIELO       #
+#######################################
 
         
 class DataloaderCapesScielo(Dataset):
@@ -368,7 +458,85 @@ class DataloaderCapesScielo(Dataset):
                self.pairs[idx]
     
     
+#############################################
+#     DATALOADER CAPESCIELO PAIRS          #
+###########################################
 
+class DataloaderCapesScieloPairs(Dataset):
+    
+    def __init__(self,dataset,n_negatives,max_length,name):
+        """
+        Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Capes or Scielo Dataset
+        """
+        
+        self.name = name
+        self.dataset = dataset
+        self.n_negatives = n_negatives
+        self.max_length = max_length
+        
+        self.sent1 ,self.sent2, self.pairs, self.labels = self.organize(self.dataset)
+        self.labels =  torch.LongTensor(self.labels)
+        
+        
+    def __len__(self):
+        return len(self.labels)
+
+    def organize(self, dataframe):
+        
+        labels = []
+        pairs = []
+        sent1 = []
+        sent2 = []
+        # Setup name of tqdm bar
+        desc = f"Loading {self.name.upper()}"
+            
+        for index in tqdm(range(len(dataframe)),desc=desc):
+            row = dataframe.iloc[index]
+            
+            # Sentences that are considered 'plagiarism' ENG->PT
+            pairs.append(f"ENG: {row.ENG}\nPT: {row.PT}")
+            sent1.append(row.ENG)
+            sent2.append(row.PT)
+            labels.append(1)
+            
+            # Sentences that are considered 'plagiarism' PT->ENG
+            pairs.append(f"PT: {row.PT}\nENG:  {row.ENG}")
+            sent1.append(row.PT)
+            sent2.append(row.ENG)
+            labels.append(1)
+            
+            # Sentences that not are considered 'plagiarism' from eng to pt
+            for neg in range(self.n_negatives):
+                text1 = row.ENG
+                text2 = eval(f"row.top_{neg+1}_qeng_pt")
+                pairs.append(f"ENG: {text1}\nNEGATIVE_{neg+1}_PT: {text2}")
+                sent1.append(text1)
+                sent2.append(text2)
+                labels.append(0)
+                
+            # Sentences that not are considered 'plagiarism' from pt to eng
+            for neg in range(self.n_negatives):
+                text1 = row.PT
+                text2 = eval(f"row.top_{neg+1}_qpt_eng")
+                pairs.append(f"PT: {text1}\nNEGATIVE_{neg+1}_ENG: {text2}")
+                sent1.append(text1)
+                sent2.append(text2)
+                labels.append(0)
+            
+        
+        return  sent1, sent2, pairs, labels
+
+    def __getitem__(self, idx):
+                
+        return self.sent1[idx],\
+               self.sent2[idx],\
+               self.labels[idx],\
+               self.pairs[idx]
+        
+    
+#########################################
+#        DATALOADER BOOKS              #
+#######################################
 class DataloaderBooks(Dataset):
     
     def __init__(self,dataset,tokenizer,max_length,name,tokenizer_type):
@@ -512,7 +680,109 @@ class DataloaderBooks(Dataset):
                self.labels[idx],\
                self.pairs[idx]
 
+
     
+#########################################
+#        DATALOADER BOOKS   PAIRS      #
+#######################################    
+class DataloaderBooksPairs(Dataset):
+    
+    def __init__(self,dataset,max_length,name):
+        """
+        Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Books Dataset
+        """
+        
+        self.name = name
+        self.dataset = dataset
+        self.max_length = max_length
+        self.sent1, self.sent2, self.pairs, self.labels = self.organize(self.dataset)
+
+        self.labels =  torch.LongTensor(self.labels)
+        
+        
+    def __len__(self):
+        return len(self.labels)
+
+    def organize(self, dataframe):
+        
+        labels = []
+        pairs = []
+        sent1 = []
+        sent2 = []
+        
+        # Setup name of tqdm bar
+        desc = f"Processing {self.name.upper()}"
+            
+        for index in tqdm(range(len(dataframe)),desc=desc):
+            row = dataframe.iloc[index]
+            
+            # Sentences that are considered 'plagiarism' ENG->PT
+            pairs.append(f"ENG: {row.ENG}\nPT: {row.PT}")
+            sent1.append(row.ENG)
+            sent2.append(row.PT)
+            labels.append(1)
+            
+            # Sentences that are considered 'plagiarism' ENG->PT_PARAPHRASE
+            pairs.append(f"ENG: {row.ENG}\nPT_PARAPHRASE: {row['paraphrase-pt']}")
+            sent1.append(row.ENG)
+            sent2.append(row['paraphrase-pt'])
+            labels.append(1)
+            
+            # Sentences that are considered 'plagiarism' PT->ENG
+            pairs.append(f"PT: {row.PT}\nENG: {row.ENG}")
+            sent1.append(row.PT)
+            sent2.append(row.ENG)
+            labels.append(1)
+            
+            # Sentences that are considered 'plagiarism' PT->ENG_PARAPHRASE
+            pairs.append(f"PT: {row.PT}\nENG_PARAPHRASE: {row['paraphrase-eng']}")
+            sent1.append(row.PT)
+            sent2.append(row['paraphrase-eng'])
+            labels.append(1)
+            
+            # Sentences that are NOT considered 'plagiarism' from ENG to PT_ERLA
+            pairs.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['pt_books_paraphrase__pt_erla']}")
+            sent1.append(row.ENG)
+            sent2.append(row['pt_books_paraphrase__pt_erla'])
+            labels.append(0) 
+            
+            # Sentences that are NOT considered 'plagiarism' from PT to ENG_ERLA
+            pairs.append(f"PT:{row.PT}\nNEGATIVE_ENG: {row['eng_books__eng_erla']}")
+            sent1.append(row.PT)
+            sent2.append(row['eng_books__eng_erla'])
+            labels.append(0) 
+            
+            # Sentences that are NOT considered 'plagiarism' (same dataset bookj) from PT to ENG
+            pairs.append(f"PT:{row.PT}\nNEGATIVE_ENG: {row['top_1_qpt_eng']}")
+            sent1.append(row.PT)
+            sent2.append(row['top_1_qpt_eng'])
+            labels.append(0) 
+            
+            # Sentences that are NOT considered 'plagiarism' (same dataset bookj) from ENG to PT
+            pairs.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['top_1_qeng_pt']}")
+            sent1.append(row.ENG)
+            sent2.append(row['top_1_qeng_pt'])
+            labels.append(0) 
+            
+
+        
+        return  sent1, sent2, pairs, labels
+
+    def __getitem__(self, idx):
+                
+        return self.sent1[idx],\
+               self.sent2[idx],\
+               self.labels[idx],\
+               self.pairs[idx]
+
+    
+    
+    
+    
+    
+#########################################
+#        DATALOADER BOOKS Double Bert  #
+#######################################      
 class DoubleBertBooks(Dataset):
     
     def __init__(self,dataset,eng_tokenizer, pt_tokenizer,max_length,name):
