@@ -1,8 +1,7 @@
 # Comum libraries
 import os
 import random
-from typing import Dict
-from typing import List
+from glob import glob
 import pandas as pd
 import re
 from argparse import Namespace
@@ -475,7 +474,6 @@ class DataloaderCapesScieloPairs(Dataset):
         self.max_length = max_length
         
         self.eng ,self.pt, self.pairs, self.labels = self.organize(self.dataset,glove_dict,stopwords_eng,stopwords_pt)
-        self.labels =  torch.LongTensor(self.labels)
         
     def __len__(self):
         return len(self.labels)
@@ -553,8 +551,8 @@ class DataloaderCapesScieloPairs(Dataset):
     def __getitem__(self, idx):
                 
         return self.eng[idx],\
-               self.pt[idx],\
-               self.labels[idx],\
+               self.pt[idx] ,\
+               self.labels[idx] ,\
                self.pairs[idx]
         
     
@@ -721,8 +719,6 @@ class DataloaderBooksPairs(Dataset):
         self.max_length = max_length
         self.eng, self.pt, self.pairs, self.labels = self.organize(self.dataset,glove_dict,stopwords_eng,stopwords_pt)
 
-        self.labels =  torch.LongTensor(self.labels)
-        
         
     def __len__(self):
         return len(self.labels)
