@@ -95,7 +95,7 @@ class CLPDDataset():
         # Max number of tokens in sentence
         self.max_length = max_length
         
-    def get_organized_pairs(self):
+    def get_word2vec_pairs(self,glove_dict,stopwords_eng,stopwords_pt):
         """
         Function to work with just one tokenizer for both languages in pt or eng.
         """
@@ -104,13 +104,13 @@ class CLPDDataset():
             if self.name == 'books':
                 raise IOError ("Books does not have a train mode")
                 
-            return  self.train_pairs()
+            return  self.train_pairs(glove_dict,stopwords_eng,stopwords_pt)
         
         elif self.data_type == 'test':
-            return self.test_pairs()
+            return self.test_pairs(glove_dict,stopwords_eng,stopwords_pt)
         
     
-    def train_pairs(self):
+    def train_pairs(self,glove_dict,stopwords_eng,stopwords_pt):
         """
         This function return pairs of sentence labeled as plagiarism or not.
 
@@ -152,18 +152,18 @@ class CLPDDataset():
         
         if len(valset) > 0:
             trainset_encoded = DataloaderCapesScieloPairs(trainset, self.n_negatives,self.max_length,
-                                                          f"{self.name} Train")
+                                                          f"{self.name} Train",glove_dict,stopwords_eng,stopwords_pt)
             valset_encoded = DataloaderCapesScieloPairs(valset, self.n_negatives,self.max_length,
-                                                        f"{self.name} Validation")    
+                                                        f"{self.name} Validation",glove_dict,stopwords_eng,stopwords_pt)    
             
             return trainset_encoded, valset_encoded
         
         else:
             trainset_encoded = DataloaderCapesScieloPairs(trainset, self.n_negatives,self.max_length,
-                                                          f"{self.name} Train")
+                                                          f"{self.name} Train",glove_dict,stopwords_eng,stopwords_pt)
             return trainset_encoded
         
-    def test_pairs(self):
+    def test_pairs(self,glove_dict,stopwords_eng,stopwords_pt):
         
         # Load pandas pkl
         testset = pd.read_pickle(f"{self.data_path}/TESTSET.pkl")
@@ -173,11 +173,11 @@ class CLPDDataset():
         
         if self.name in ['capes','scielo']:
             testset_encoded = DataloaderCapesScieloPairs(testset, 2 ,
-                                                    self.max_length, f"{self.name} Test")
+                                                    self.max_length, f"{self.name} Test",glove_dict,stopwords_eng,stopwords_pt)
         
         elif self.name in ['books']:
             testset_encoded = DataloaderBooksPairs(testset, self.max_length,
-                                                   f"{self.name} Test")
+                                                   f"{self.name} Test",glove_dict,stopwords_eng,stopwords_pt)
         
         return testset_encoded
         
@@ -464,7 +464,7 @@ class DataloaderCapesScielo(Dataset):
 
 class DataloaderCapesScieloPairs(Dataset):
     
-    def __init__(self,dataset,n_negatives,max_length,name):
+    def __init__(self,dataset,n_negatives,max_length,name,glove_dict,stopwords_eng,stopwords_pt):
         """
         Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Capes or Scielo Dataset
         """
@@ -474,19 +474,18 @@ class DataloaderCapesScieloPairs(Dataset):
         self.n_negatives = n_negatives
         self.max_length = max_length
         
-        self.sent1 ,self.sent2, self.pairs, self.labels = self.organize(self.dataset)
+        self.eng ,self.pt, self.pairs, self.labels = self.organize(self.dataset,glove_dict,stopwords_eng,stopwords_pt)
         self.labels =  torch.LongTensor(self.labels)
-        
         
     def __len__(self):
         return len(self.labels)
 
-    def organize(self, dataframe):
+    def organize(self, dataframe,glove_dict,stopwords_eng,stopwords_pt):
         
         labels = []
         pairs = []
-        sent1 = []
-        sent2 = []
+        eng = []
+        pt = []
         # Setup name of tqdm bar
         desc = f"Loading {self.name.upper()}"
             
@@ -495,23 +494,18 @@ class DataloaderCapesScieloPairs(Dataset):
             
             # Sentences that are considered 'plagiarism' ENG->PT
             pairs.append(f"ENG: {row.ENG}\nPT: {row.PT}")
-            sent1.append(row.ENG)
-            sent2.append(row.PT)
+            eng.append(row.ENG)
+            pt.append(row.PT)
             labels.append(1)
-            
-            # Sentences that are considered 'plagiarism' PT->ENG
-            pairs.append(f"PT: {row.PT}\nENG:  {row.ENG}")
-            sent1.append(row.PT)
-            sent2.append(row.ENG)
-            labels.append(1)
+        
             
             # Sentences that not are considered 'plagiarism' from eng to pt
             for neg in range(self.n_negatives):
                 text1 = row.ENG
                 text2 = eval(f"row.top_{neg+1}_qeng_pt")
                 pairs.append(f"ENG: {text1}\nNEGATIVE_{neg+1}_PT: {text2}")
-                sent1.append(text1)
-                sent2.append(text2)
+                eng.append(text1)
+                pt.append(text2)
                 labels.append(0)
                 
             # Sentences that not are considered 'plagiarism' from pt to eng
@@ -519,17 +513,47 @@ class DataloaderCapesScieloPairs(Dataset):
                 text1 = row.PT
                 text2 = eval(f"row.top_{neg+1}_qpt_eng")
                 pairs.append(f"PT: {text1}\nNEGATIVE_{neg+1}_ENG: {text2}")
-                sent1.append(text1)
-                sent2.append(text2)
+                pt.append(text1)
+                eng.append(text2)
                 labels.append(0)
-            
+         
+        # Get english embedding 
+        eng = [
+                torch.tensor([ glove_dict[word] 
+                          for word in entry.split()
+                            if (word in glove_dict) and (word not in stopwords_eng)
+                ]).type(torch.long) 
+                for entry in eng]
         
-        return  sent1, sent2, pairs, labels
+        # Get pt embedding 
+
+        pt = [
+                torch.tensor([ glove_dict[word] 
+                          for word in entry.split()
+                            if (word in glove_dict) and (word not in stopwords_pt)
+                ]).type(torch.long) 
+                for entry in pt]
+        
+        
+        # Eliminate null tensors
+        pt_feat = []
+        eng_feat = []
+        labels_feat = []
+        pairs_feat = []
+        
+        for index in tqdm(range(len(eng))):
+            if eng[index].sum() and pt[index].sum():
+                pt_feat.append(pt[index])
+                eng_feat.append(eng[index])
+                labels_feat.append(labels[index])
+                pairs_feat.append(pairs[index])
+        
+        return  eng_feat, pt_feat, pairs_feat, labels_feat
 
     def __getitem__(self, idx):
                 
-        return self.sent1[idx],\
-               self.sent2[idx],\
+        return self.eng[idx],\
+               self.pt[idx],\
                self.labels[idx],\
                self.pairs[idx]
         
@@ -687,7 +711,7 @@ class DataloaderBooks(Dataset):
 #######################################    
 class DataloaderBooksPairs(Dataset):
     
-    def __init__(self,dataset,max_length,name):
+    def __init__(self,dataset,max_length,name,glove_dict,stopwords_eng,stopwords_pt):
         """
         Creates a dataset ready to use on Torch Dataloader basead on the dataframe organized from Books Dataset
         """
@@ -695,7 +719,7 @@ class DataloaderBooksPairs(Dataset):
         self.name = name
         self.dataset = dataset
         self.max_length = max_length
-        self.sent1, self.sent2, self.pairs, self.labels = self.organize(self.dataset)
+        self.eng, self.pt, self.pairs, self.labels = self.organize(self.dataset,glove_dict,stopwords_eng,stopwords_pt)
 
         self.labels =  torch.LongTensor(self.labels)
         
@@ -703,12 +727,12 @@ class DataloaderBooksPairs(Dataset):
     def __len__(self):
         return len(self.labels)
 
-    def organize(self, dataframe):
+    def organize(self, dataframe,glove_dict,stopwords_eng,stopwords_pt):
         
         labels = []
         pairs = []
-        sent1 = []
-        sent2 = []
+        eng = []
+        pt = []
         
         # Setup name of tqdm bar
         desc = f"Processing {self.name.upper()}"
@@ -718,60 +742,83 @@ class DataloaderBooksPairs(Dataset):
             
             # Sentences that are considered 'plagiarism' ENG->PT
             pairs.append(f"ENG: {row.ENG}\nPT: {row.PT}")
-            sent1.append(row.ENG)
-            sent2.append(row.PT)
+            eng.append(row.ENG)
+            pt.append(row.PT)
             labels.append(1)
             
             # Sentences that are considered 'plagiarism' ENG->PT_PARAPHRASE
             pairs.append(f"ENG: {row.ENG}\nPT_PARAPHRASE: {row['paraphrase-pt']}")
-            sent1.append(row.ENG)
-            sent2.append(row['paraphrase-pt'])
+            eng.append(row.ENG)
+            pt.append(row['paraphrase-pt'])
             labels.append(1)
             
-            # Sentences that are considered 'plagiarism' PT->ENG
-            pairs.append(f"PT: {row.PT}\nENG: {row.ENG}")
-            sent1.append(row.PT)
-            sent2.append(row.ENG)
-            labels.append(1)
             
             # Sentences that are considered 'plagiarism' PT->ENG_PARAPHRASE
             pairs.append(f"PT: {row.PT}\nENG_PARAPHRASE: {row['paraphrase-eng']}")
-            sent1.append(row.PT)
-            sent2.append(row['paraphrase-eng'])
+            pt.append(row.PT)
+            eng.append(row['paraphrase-eng'])
             labels.append(1)
             
             # Sentences that are NOT considered 'plagiarism' from ENG to PT_ERLA
             pairs.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['pt_books_paraphrase__pt_erla']}")
-            sent1.append(row.ENG)
-            sent2.append(row['pt_books_paraphrase__pt_erla'])
+            eng.append(row.ENG)
+            pt.append(row['pt_books_paraphrase__pt_erla'])
             labels.append(0) 
             
             # Sentences that are NOT considered 'plagiarism' from PT to ENG_ERLA
             pairs.append(f"PT:{row.PT}\nNEGATIVE_ENG: {row['eng_books__eng_erla']}")
-            sent1.append(row.PT)
-            sent2.append(row['eng_books__eng_erla'])
+            pt.append(row.PT)
+            eng.append(row['eng_books__eng_erla'])
             labels.append(0) 
             
             # Sentences that are NOT considered 'plagiarism' (same dataset bookj) from PT to ENG
             pairs.append(f"PT:{row.PT}\nNEGATIVE_ENG: {row['top_1_qpt_eng']}")
-            sent1.append(row.PT)
-            sent2.append(row['top_1_qpt_eng'])
+            pt.append(row.PT)
+            eng.append(row['top_1_qpt_eng'])
             labels.append(0) 
             
             # Sentences that are NOT considered 'plagiarism' (same dataset bookj) from ENG to PT
             pairs.append(f"ENG:{row.ENG}\nNEGATIVE_PT: {row['top_1_qeng_pt']}")
-            sent1.append(row.ENG)
-            sent2.append(row['top_1_qeng_pt'])
+            eng.append(row.ENG)
+            pt.append(row['top_1_qeng_pt'])
             labels.append(0) 
-            
 
+             # Get english embedding 
+        eng = [
+                torch.tensor([ glove_dict[word] 
+                          for word in entry.split()
+                            if (word in glove_dict) and (word not in stopwords_eng)
+                ]).type(torch.long) 
+                for entry in eng]
         
-        return  sent1, sent2, pairs, labels
+        # Get pt embedding 
+
+        pt = [
+                torch.tensor([ glove_dict[word] 
+                          for word in entry.split()
+                            if (word in glove_dict) and (word not in stopwords_pt)
+                ]).type(torch.long) 
+                for entry in pt]
+        
+        # Eliminate null tensors
+        pt_feat = []
+        eng_feat = []
+        labels_feat = []
+        pairs_feat = []
+        
+        for index in tqdm(range(len(eng))):
+            if eng[index].sum() and pt[index].sum():
+                pt_feat.append(pt[index])
+                eng_feat.append(eng[index])
+                labels_feat.append(labels[index])
+                pairs_feat.append(pairs[index])
+        
+        return  eng_feat, pt_feat, pairs_feat, labels_feat
 
     def __getitem__(self, idx):
                 
-        return self.sent1[idx],\
-               self.sent2[idx],\
+        return self.eng[idx],\
+               self.pt[idx],\
                self.labels[idx],\
                self.pairs[idx]
 
